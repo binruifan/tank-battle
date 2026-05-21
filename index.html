@@ -237,7 +237,7 @@ class Tank {
     this.dir = dir; // 0=上 1=右 2=下 3=左
     this.color = color;
     this.isPlayer = isPlayer;
-    this.speed = isPlayer ? 2.5 : 1.2;
+    this.speed = isPlayer ? 3 : 1.2;
     this.size = 28; // 碰撞半径用
     this.alive = true;
     this.cooldown = 0;
@@ -261,19 +261,19 @@ class Tank {
   }
 
   collidesMap(dx, dy) {
-    const half = TILE / 2 - 3;
-    const rect = {
-      left: this.x + dx - half, top: this.y + dy - half,
-      right: this.x + dx + half, bottom: this.y + dy + half,
-    };
+    const half = 10; // 20px 宽碰撞盒，32px 格子留 6px 余量每侧
+    let left = this.x + dx - half;
+    let top = this.y + dy - half;
+    let right = this.x + dx + half;
+    let bottom = this.y + dy + half;
 
-    const leftCol = Math.floor(rect.left / TILE);
-    const rightCol = Math.floor(rect.right / TILE);
-    const topRow = Math.floor(rect.top / TILE);
-    const bottomRow = Math.floor(rect.bottom / TILE);
+    const startCol = Math.floor(left / TILE);
+    const endCol = Math.floor((right - 0.01) / TILE);
+    const startRow = Math.floor(top / TILE);
+    const endRow = Math.floor((bottom - 0.01) / TILE);
 
-    for (let row = topRow; row <= bottomRow; row++) {
-      for (let col = leftCol; col <= rightCol; col++) {
+    for (let row = startRow; row <= endRow; row++) {
+      for (let col = startCol; col <= endCol; col++) {
         if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return true;
         const tile = map[row * COLS + col];
         if (tile === 1 || tile === 2 || tile === 3) return true;
@@ -283,10 +283,38 @@ class Tank {
   }
 
   move(dx, dy) {
-    if (!this.collidesMap(dx, 0)) this.x += dx;
-    if (!this.collidesMap(0, dy)) this.y += dy;
-
+    // 先尝试 x + y 一起移动
+    if (!this.collidesMap(dx, dy)) {
+      this.x += dx;
+      this.y += dy;
+    } else if (!this.collidesMap(dx, 0)) {
+      // 单独 x 方向可行
+      this.x += dx;
+    } else if (!this.collidesMap(0, dy)) {
+      // 单独 y 方向可行
+      this.y += dy;
+    }
     // 边界限制
+    const half = TILE / 2;
+    this.x = Math.max(half, Math.min(W - half, this.x));
+    this.y = Math.max(half, Math.min(H - half, this.y));
+  }
+
+  // 碰撞后滑动修正：尝试沿墙滑动
+  slideMove(dx, dy) {
+    if (!this.collidesMap(dx, dy)) {
+      this.x += dx;
+      this.y += dy;
+      return;
+    }
+    // 单独试 x
+    if (!this.collidesMap(dx, 0)) {
+      this.x += dx;
+    }
+    // 单独试 y
+    if (!this.collidesMap(0, dy)) {
+      this.y += dy;
+    }
     const half = TILE / 2;
     this.x = Math.max(half, Math.min(W - half, this.x));
     this.y = Math.max(half, Math.min(H - half, this.y));
@@ -494,15 +522,16 @@ function getEmptySpawn() {
   const candidates = [];
   // 尝试在角落/边缘生成
   const margins = [0, ROWS - 1, 0, COLS - 1]; // top, bottom, left, right
+  const half = TILE / 2;
   const spawnPoints = [
-    [COLS/2 * TILE, TILE], // 上方中央
-    [COLS/2 * TILE, (ROWS-1) * TILE], // 下方中央
-    [TILE, ROWS/2 * TILE], // 左侧中央
-    [(COLS-1) * TILE, ROWS/2 * TILE], // 右侧中央
-    [3 * TILE, 3 * TILE],
-    [(COLS-3) * TILE, 3 * TILE],
-    [3 * TILE, (ROWS-3) * TILE],
-    [(COLS-3) * TILE, (ROWS-3) * TILE],
+    [(COLS/2 * TILE + half), TILE + half], // 上方中央
+    [(COLS/2 * TILE + half), (ROWS - 1) * TILE + half], // 下方中央
+    [TILE + half, ROWS/2 * TILE + half], // 左侧中央
+    [(COLS - 1) * TILE + half, ROWS/2 * TILE + half], // 右侧中央
+    [3 * TILE + half, 3 * TILE + half],
+    [(COLS - 3) * TILE + half, 3 * TILE + half],
+    [3 * TILE + half, (ROWS - 3) * TILE + half],
+    [(COLS - 3) * TILE + half, (ROWS - 3) * TILE + half],
   ];
   for (const [sx, sy] of spawnPoints) {
     const col = Math.floor(sx / TILE);
@@ -563,8 +592,8 @@ function nextWave() {
   map = [...MAPS[mapIdx]];
 
   // 重置玩家位置
-  player.x = COLS/2 * TILE;
-  player.y = (ROWS - 2) * TILE;
+  player.x = (COLS/2 * TILE + TILE/2);
+  player.y = ((ROWS - 2) * TILE + TILE/2);
   player.alive = true;
   player.health = 1;
   invincibleTimer = 120;
@@ -581,7 +610,7 @@ function nextWave() {
 // ─── 初始化 ───
 function initGame() {
   map = [...MAPS[0]];
-  player = new Tank(COLS/2 * TILE, (ROWS - 2) * TILE, 0, '#4a4', true);
+  player = new Tank((COLS/2 * TILE + TILE/2), ((ROWS - 2) * TILE + TILE/2), 0, '#4a4', true);
   enemies = [];
   bullets = [];
   particles = [];
@@ -657,7 +686,10 @@ function update() {
       }
     }
 
-    enemy.moveForward();
+    // 敌人滑动移动
+    const enemyDirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const [edx, edy] = enemyDirs[enemy.dir];
+    enemy.slideMove(edx * enemy.speed, edy * enemy.speed);
 
     // 偶尔射击
     if (player.alive && Math.random() < 0.012) {
@@ -678,8 +710,14 @@ function update() {
     for (let j = i + 1; j < enemies.length; j++) {
       if (!enemies[i].alive || !enemies[j].alive) continue;
       if (enemies[i].collidesWith(enemies[j])) {
-        enemies[i].moveBackward();
-        enemies[j].moveBackward();
+        // 排斥分开
+        const pushDx = enemies[i].x - enemies[j].x;
+        const pushDy = enemies[i].y - enemies[j].y;
+        const pushLen = Math.sqrt(pushDx*pushDx + pushDy*pushDy) || 1;
+        const pushX = (pushDx / pushLen) * 3;
+        const pushY = (pushDy / pushLen) * 3;
+        enemies[i].slideMove(pushX, pushY);
+        enemies[j].slideMove(-pushX, -pushY);
       }
     }
   }
@@ -789,8 +827,8 @@ function playerHealthHit() {
     setTimeout(() => showGameOver(false), 1500);
   } else {
     // 重生
-    player.x = COLS/2 * TILE;
-    player.y = (ROWS - 2) * TILE;
+    player.x = (COLS/2 * TILE + TILE/2);
+    player.y = ((ROWS - 2) * TILE + TILE/2);
     player.alive = true;
   }
 }
